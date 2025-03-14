@@ -1,0 +1,144 @@
+name: Build and Deploy AMI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:latest
+        env:
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: ${{ secrets.DB_USER }}
+          MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASS }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=localhost --user=root --password=rootpass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+      - name: Set up environment variables
+        run: |
+          echo "DB_NAME=testdb" >> .env
+          echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+          echo "DB_PASS=${{ secrets.DB_PASS }}" >> .env
+          echo "DB_HOST=127.0.0.1" >> .env
+          echo "DB_DIALECT=mysql" >> .env
+          cat .env
+      - name: Ensure Sequelize config and migrations exist
+        run: |
+          mkdir -p config migrations
+          echo '{
+            "development": {
+              "username": "${{ secrets.DB_USER }}",
+              "password": "${{ secrets.DB_PASS }}",
+              "database": "testdb",
+              "host": "127.0.0.1",
+              "dialect": "mysql"
+            }
+          }' > config/config.json
+          cat config/config.json
+      - name: Generate initial migration if none exist
+        run: |
+          if [ -z "$(ls -A migrations)" ]; then
+            echo "Generating initial migration..."
+            npx sequelize-cli model:generate --name User --attributes name:string,email:string,password:string
+          fi
+
+      - name: Run database migrations
+        run: npx sequelize-cli db:migrate
+
+      - name: Run tests
+        run: npm test
+
+  build-artifact:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build application
+        run: |
+          mkdir -p artifact
+          zip -r artifact/webapp.zip . -x "*.git*" "*.github*" "node_modules/*"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp
+          path: artifact/webapp.zip
+
+  packer-build:
+    needs: build-artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: webapp
+          path: .
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@v2
+
+      - name: Packer Init
+        run: packer init .
+
+      - name: Packer Format
+        run: packer fmt -check .
+
+      - name: Create AMI Name
+        id: create_image_name
+        run: echo "IMAGE_NAME=webapp-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: Packer Build
+        run: |
+          packer build \
+            -var "artifact_path=webapp.zip" \
+            -var "ami_name=${{ steps.create_image_name.outputs.IMAGE_NAME }}" \
+            -var "source_ami=${{ secrets.AWS_SOURCE_AMI_ID }}" \
+            -var "vpc_to_use=${{ secrets.AWS_VPC_ID }}" \
+            -var "subnet_to_use=${{ secrets.AWS_SUBNET_ID }}" \
+            -var "db_user=${{ secrets.DB_USER }}" \
+            -var "db_pass=${{ secrets.DB_PASS }}" \
+            -var "db_root_pass=${{ secrets.DB_ROOT_PASS }}" \
+            packer.pkr.hcl

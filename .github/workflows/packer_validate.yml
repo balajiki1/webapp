@@ -1,0 +1,48 @@
+name: Packer Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-packer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup HashiCorp Packer
+        uses: hashicorp/setup-packer@v3.1.0
+        with:
+          version: latest
+
+      - name: Packer Init
+        run: packer init .
+
+      - name: Create Artifact
+        run: |
+          touch webapp.zip
+
+      - name: Packer Format Check
+        run: packer fmt -check .
+
+      - name: Create variables.pkrvars.hcl
+        run: |
+          cat <<EOF > variables.pkrvars.hcl
+          ami_name       = "test-ami"
+          db_user        = "${{ secrets.DB_USER }}"
+          db_pass        = "${{ secrets.DB_PASS }}"
+          db_root_pass   = "${{ secrets.DB_ROOT_PASS }}"
+          vpc_to_use     = "${{ secrets.AWS_VPC_ID }}"
+          subnet_to_use  = "${{ secrets.AWS_SUBNET_ID }}"
+          source_ami     = "${{ secrets.AWS_SOURCE_AMI_ID }}"
+          EOF
+
+      - name: Packer Validate
+        run: |
+          packer validate -var-file="variables.pkrvars.hcl" .
+
+      - name: Cleanup
+        run: rm -f variables.pkrvars.hcl

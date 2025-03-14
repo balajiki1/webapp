@@ -1,0 +1,71 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:latest
+        env:
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: ${{ secrets.DB_USER }}
+          MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASS }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=localhost --user=root --password=rootpass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set up environment variables
+        run: |
+          echo "DB_NAME=testdb" >> .env
+          echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+          echo "DB_PASS=${{ secrets.DB_PASS }}" >> .env
+          echo "DB_HOST=127.0.0.1" >> .env
+          echo "DB_DIALECT=mysql" >> .env
+
+      - name: Ensure Sequelize config and migrations exist
+        run: |
+          mkdir -p config migrations
+          echo '{
+            "development": {
+              "username": "${{ secrets.DB_USER }}",
+              "password": "${{ secrets.DB_PASS }}",
+              "database": "testdb",
+              "host": "127.0.0.1",
+              "dialect": "mysql"
+            }
+          }' > config/config.json
+
+      - name: Generate initial migration if none exist
+        run: |
+          if [ -z "$(ls -A migrations)" ]; then
+            echo "Generating initial migration..."
+            npx sequelize-cli model:generate --name User --attributes name:string,email:string,password:string
+          fi
+
+      - name: Run database migrations
+        run: npx sequelize-cli db:migrate
+
+      - name: Run tests
+        run: npm test
