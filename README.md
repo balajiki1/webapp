@@ -11,6 +11,9 @@
   
 **Installation**
 
+
+
+
 * Clone the repository using git command: git clone git@github.com:CSYE-6225Spring-2025/webapp.git
 * Navigate to webapp directory using git CLI (git bash): cd webapp
 * Install dependencies (dotenv, express, sequelize) using git command: npm install
