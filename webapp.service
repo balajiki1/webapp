@@ -1,0 +1,17 @@
+[Unit]
+Description=My Node.js Web Application
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /var/www/webapp/index.js
+Restart=always
+User=csye6225
+Group=csye6225
+EnvironmentFile=/var/www/webapp/.env
+WorkingDirectory=/var/www/webapp
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=webapp
+
+[Install]
+WantedBy=multi-user.target
